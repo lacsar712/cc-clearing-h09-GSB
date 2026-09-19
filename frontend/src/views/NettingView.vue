@@ -6,7 +6,7 @@
     <el-alert
       v-if="lastOutcome.text"
       style="margin-bottom:12px"
-      :type="lastOutcome.ok ? 'success' : 'info'"
+      :type="lastOutcome.type || (lastOutcome.ok ? 'success' : 'info')"
       :closable="false"
       :title="lastOutcome.text"
     />
@@ -67,7 +67,7 @@
 import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import api from '../api/client'
-import { buildOutcomeBanner, celebrateNettingSuccess, shouldCelebrateAfterRequest } from '../utils/nettingOutcome'
+import { buildOutcomeBanner, celebrateNettingSuccess, extractErrorMessage, isSuccessfulResponse } from '../utils/nettingOutcome'
 import { useAuthStore } from '../stores/auth'
 
 const auth = useAuthStore()
@@ -97,29 +97,28 @@ async function loadRuns() {
 
 async function execute() {
   running.value = true
-  lastOutcome.value = { ok: false, text: '执行中…' }
-  let ok = false
-  let payload = null
+  lastOutcome.value = { ok: false, type: 'info', text: '执行中…' }
   try {
     const { data } = await api.post('/netting-runs', {
       settleDate: settleDate.value,
       currency: currency.value
     })
-    result.value = data
-    payload = data
-    ok = true
-    await loadRuns()
-  } catch (e) {
-    result.value = null
-    payload = null
-    ok = false
-    await loadRuns()
-  } finally {
-    lastOutcome.value = buildOutcomeBanner(ok, payload)
-    // BUG: celebrate even when ok === false
-    if (shouldCelebrateAfterRequest()) {
+    // 成功判定与 HTTP 成败绑定：2xx 且业务状态 COMPLETED 才提示成功
+    if (!isSuccessfulResponse(data)) {
+      lastOutcome.value = buildOutcomeBanner(true, data)
+      result.value = null
+    } else {
+      result.value = data
+      lastOutcome.value = buildOutcomeBanner(true, data)
       celebrateNettingSuccess(ElMessage)
     }
+    await loadRuns()
+  } catch (e) {
+    // 失败路径：result 清空、红色错误横幅；axios 拦截器同时弹错误 toast，禁止任何成功提示
+    result.value = null
+    lastOutcome.value = buildOutcomeBanner(false, null, extractErrorMessage(e))
+    await loadRuns()
+  } finally {
     running.value = false
   }
 }
